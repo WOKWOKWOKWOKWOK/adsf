@@ -1,9 +1,9 @@
+import re
 import urllib.parse
 import requests
 from bs4 import BeautifulSoup
 import streamlit as st
 
-# Set Streamlit Page Layout
 st.set_page_config(
     page_title="Utopia Web Browser",
     page_icon="🌐",
@@ -11,141 +11,119 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom Utopia Dark Theme Styling
+# Dark UI Styling
 st.markdown("""
 <style>
-    .stApp {
-        background-color: #0e1117;
-        color: #ffffff;
-    }
-    .stButton > button {
-        width: 100%;
-        border-radius: 6px;
-    }
-    .url-bar {
-        margin-bottom: 10px;
-    }
+    .stApp { background-color: #0e1117; color: #ffffff; }
+    .stButton > button { width: 100%; border-radius: 6px; }
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize Session States
+# State initialization
 if "history" not in st.session_state:
     st.session_state.history = []
 if "bookmarks" not in st.session_state:
     st.session_state.bookmarks = [
-        {"name": "DuckDuckGo", "url": "https://html.duckduckgo.com"},
-        {"name": "Wikipedia", "url": "https://www.wikipedia.org"},
-        {"name": "GitHub", "url": "https://github.com"}
+        {"name": "DuckDuckGo HTML", "url": "https://html.duckduckgo.com/html/"},
+        {"name": "Wikipedia", "url": "https://en.wikipedia.org/wiki/Main_Page"},
+        {"name": "Hacker News", "url": "https://news.ycombinator.com"}
     ]
 if "current_url" not in st.session_state:
-    st.session_state.current_url = "https://html.duckduckgo.com"
+    st.session_state.current_url = "https://html.duckduckgo.com/html/"
 
 def parse_input(user_input: str) -> str:
-    """Converts search terms into a DuckDuckGo query or formats valid URLs."""
     user_input = user_input.strip()
     if not user_input:
-        return "https://html.duckduckgo.com"
+        return "https://html.duckduckgo.com/html/"
     if user_input.startswith(("http://", "https://")):
         return user_input
     if "." in user_input and " " not in user_input:
         return f"https://{user_input}"
     
-    # Web search fallback
     encoded_query = urllib.parse.quote(user_input)
     return f"https://html.duckduckgo.com/html/?q={encoded_query}"
 
-def fetch_proxied_html(url: str) -> str:
-    """Fetches HTML server-side and injects a base URL tag to preserve relative assets."""
+def fetch_and_clean_html(target_url: str) -> str:
+    """Fetches web content, injects base URL, and strips frame restrictions."""
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5"
     }
+    
     try:
-        res = requests.get(url, headers=headers, timeout=8)
-        res.raise_for_status()
+        response = requests.get(target_url, headers=headers, timeout=10, allow_redirects=True)
+        response.raise_for_status()
         
-        soup = BeautifulSoup(res.text, "html.parser")
+        soup = BeautifulSoup(response.text, "html.parser")
         
-        # Inject <base> tag so CSS/JS relative links resolve accurately
+        # Remove meta tags that enforce iframe restrictions
+        for meta in soup.find_all("meta"):
+            if meta.get("http-equiv", "").lower() in ["x-frame-options", "content-security-policy"]:
+                meta.decompose()
+        
+        # Inject <base> tag so relative styles, images, and links resolve correctly
+        base_tag = soup.new_tag("base", href=target_url)
         if soup.head:
-            base_tag = soup.new_tag("base", href=url)
             soup.head.insert(0, base_tag)
-            
+        else:
+            head_tag = soup.new_tag("head")
+            head_tag.insert(0, base_tag)
+            if soup.html:
+                soup.html.insert(0, head_tag)
+
         return str(soup)
-    except Exception as e:
+
+    except Exception as err:
         return f"""
-        <div style="color: #ff4b4b; padding: 20px; font-family: sans-serif; background-color: #1e1e1e; border-radius: 8px;">
-            <h3>⚠️ Network / Refusal Error</h3>
-            <p>Could not fetch <code>{url}</code> via proxy mode.</p>
-            <p><b>Details:</b> {str(e)}</p>
-            <p><i>Try switching the Render Mode to "Direct Iframe" in the navigation bar.</i></p>
+        <div style="color: #ff6b6b; padding: 25px; background: #1a1c23; border-radius: 8px; font-family: sans-serif;">
+            <h2>⚠️ Website Blocked or Unreachable</h2>
+            <p><b>URL:</b> <code>{target_url}</code></p>
+            <p><b>Reason:</b> {str(err)}</p>
+            <p>Some major platforms (e.g., Google, YouTube) use bot detection or strict security policies that reject simple proxy scripts.</p>
         </div>
         """
 
-# Sidebar Options & Bookmarks
-st.sidebar.title("🌐 Utopia Control Panel")
+# Sidebar Navigation
+st.sidebar.title("🌐 Utopia Control")
 
-# Speed Dial / Bookmarks Section
 st.sidebar.subheader("⭐ Bookmarks")
 for bm in st.session_state.bookmarks:
     if st.sidebar.button(f"📌 {bm['name']}", key=f"bm_{bm['url']}"):
         st.session_state.current_url = bm["url"]
         st.rerun()
 
-# Bookmark Management
-with st.sidebar.expander("➕ Add Current Page to Bookmarks"):
-    bm_name = st.text_input("Bookmark Label", value="")
-    if st.button("Save Bookmark") and bm_name:
-        st.session_state.bookmarks.append({"name": bm_name, "url": st.session_state.current_url})
-        st.sidebar.success("Bookmark added!")
-
-# History Section
-st.sidebar.subheader("📜 Browsing History")
-if st.sidebar.button("Clear History"):
-    st.session_state.history = []
-    st.rerun()
-
-for idx, hist_url in enumerate(reversed(st.session_state.history[-10:])):
-    if st.sidebar.button(f"🔗 {hist_url[:30]}...", key=f"hist_{idx}"):
-        st.session_state.current_url = hist_url
+st.sidebar.subheader("📜 History")
+for idx, item in enumerate(reversed(st.session_state.history[-5:])):
+    if st.sidebar.button(f"🔗 {item[:25]}...", key=f"h_{idx}"):
+        st.session_state.current_url = item
         st.rerun()
 
-# Main Browser Bar
-st.title("Utopia Web Browser")
+# Top Address Bar
+st.title("Utopia Browser")
+c1, c2, c3 = st.columns([6, 2, 2])
 
-col1, col2, col3 = st.columns([6, 2, 2])
+with c1:
+    url_input = st.text_input("URL", value=st.session_state.current_url, label_visibility="collapsed")
 
-with col1:
-    input_text = st.text_input(
-        "Enter URL or Search Query", 
-        value=st.session_state.current_url,
-        placeholder="https://example.com or search python...",
-        label_visibility="collapsed"
-    )
-
-with col2:
-    if st.button("🚀 Navigate", use_container_width=True):
-        new_url = parse_input(input_text)
-        st.session_state.current_url = new_url
-        if new_url not in st.session_state.history:
-            st.session_state.history.append(new_url)
+with c2:
+    if st.button("Go", use_container_width=True):
+        final_url = parse_input(url_input)
+        st.session_state.current_url = final_url
+        if final_url not in st.session_state.history:
+            st.session_state.history.append(final_url)
         st.rerun()
 
-with col3:
-    render_mode = st.selectbox(
-        "Render Mode", 
-        ["Proxied HTML", "Direct Iframe"], 
-        label_visibility="collapsed"
-    )
+with c3:
+    mode = st.selectbox("Mode", ["Proxied HTML", "Direct Iframe"], label_visibility="collapsed")
 
 st.divider()
 
-# Rendering View
+# Rendering engine selection
 active_url = st.session_state.current_url
 
-if render_mode == "Direct Iframe":
-    st.caption(f"Rendering `{active_url}` via direct embedded frame:")
-    st.components.v1.iframe(src=active_url, height=750, scrolling=True)
+if mode == "Proxied HTML":
+    html_data = fetch_and_clean_html(active_url)
+    st.components.v1.html(html_data, height=800, scrolling=True)
 else:
-    st.caption(f"Rendering `{active_url}` via server-side proxy fetch:")
-    html_content = fetch_proxied_html(active_url)
-    st.components.v1.html(html_content, height=750, scrolling=True)
+    st.components.v1.iframe(src=active_url, height=800, scrolling=True)
